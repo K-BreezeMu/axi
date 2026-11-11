@@ -1,53 +1,114 @@
-# AXI4 RAM 验证项目 (UVM)
+# AXI4 RAM UVM Verification Project
 
-## 项目状态
-🟡 **WIP (Work In Progress)** - 本项目的 UVM 验证环境正在搭建中，目前已完成基础组件的框架搭建，正在完善 Refmodel 和 Scoreboard 的比对逻辑。
+> **Status: 🟡 WIP (Work In Progress) / 状态：🟡 开发中**  
+> This project is currently under active development. The UVM environment skeleton and core components (Driver, Monitor, Refmodel) are implemented, while the Scoreboard and coverage collection are being refined.
+> 本项目正在开发中。UVM 环境框架及核心组件（Driver、Monitor、Refmodel）已搭建，Scoreboard 与覆盖率收集正在完善中。
 
-## DUT (Design Under Test) 简介
-本项目的待测设计（DUT）是一个基于 AXI4 协议的片上 RAM（`axi_ram`）。该模块作为一个标准的 AXI4 从设备（Slave），接收来自主机（Master）的读写请求，并将其转换为内部 32-bit 宽度的存储阵列访问。
+---
 
-## 接口说明
-DUT 采用标准的 AXI4 从机接口，主要参数配置如下：
-*   **数据总线宽度 (`DATA_WIDTH`)**: 32 bit (4 Bytes)
-*   **地址总线宽度 (`ADDR_WIDTH`)**: 16 bit (寻址空间 64 KB)
-*   **ID 信号宽度 (`ID_WIDTH`)**: 8 bit
-*   **字节掩码宽度 (`STRB_WIDTH`)**: 4 bit (`WSTRB`)
-*   **复位信号**: `rst`，**高电平有效**（Active-High），复位时清空状态机但保留 RAM 内部数据。
+<details open>
+<summary><b>🇬🇧 English Version</b></summary>
 
-### 信号通道
-*   **AW (Write Address)**: 写地址通道。主机发起写事务时提供首地址、突发长度及大小。
-*   **W (Write Data)**: 写数据通道。主机按拍发送 32-bit 数据及 `WSTRB` 掩码。
-*   **B (Write Response)**: 写响应通道。DUT 接收完所有写数据后，返回响应。
-*   **AR (Read Address)**: 读地址通道。主机发起读事务时提供读首地址。
-*   **R (Read Data)**: 读数据通道。DUT 将一整块 32-bit 数据吐出，并用 `RLAST` 标记最后一拍。
+## 📌 DUT Overview
 
-## DUT 功能特性
-1.  **突发类型 (Burst Type)**:
-    *   **INCR (递增模式, `2'b01`)**: 最常用模式，地址按 `2^AxSIZE` 递增。
-    *   **FIXED (固定模式, `2'b00`)**: 地址保持不变，持续写入同一地址。
-    *   *(注：当前 RTL 不支持 WRAP 回绕模式)*
-2.  **字节掩码控制 (WSTRB)**: 严格依赖 Master 给出的 `WSTRB` 决定 32-bit 总线上的哪几个字节（Lane）被真正写入内部 RAM，未选中字节保持不变。
-3.  **内部寻址机制**: 内部存储阵列宽度为 32-bit。DUT 会将外部 16-bit 字节地址的末 2 位截断（`addr >> 2`）以查找内部 Word，并通过 `WSTRB` 匹配具体字节。
-4.  **读操作全量输出**: 无论读请求的 `ARSIZE` 是多少，DUT 总是返回所在 32-bit 数据块的整体数据，由 Master 自行根据地址低位和 `ARSIZE` 过滤有效字节。
-5.  **无 Outstanding 能力**: 当前 DUT 为极简设计，不支持乱序和并发操作（Outstanding），必须严格完成一次读写突发后，才能处理下一次请求。
+The Design Under Test (DUT) is an AXI4-compliant Block RAM (`axi_ram`). It acts as a standard AXI4 Slave device, receiving read/write requests from the master and translating them into internal 32-bit wide memory accesses.
 
-## UVM 验证环境架构 (当前进度)
-本项目使用 SystemVerilog + UVM 搭建验证环境，目前包含以下组件：
-*   **`axi_transaction`**: 定义事务类型，包含激励随机字段与采集字段，通过 `op` 与 `is_write` 标识操作类型。
-*   **`axi_driver`**: 负责解析 Sequence 下发的指令，严格按 AXI 协议时序驱动总线。目前支持 `reset`、`fixed_wr/rd`、`incr_wr/rd`。
-*   **`axi_monitor`**: 挂载在总线上，利用 `fork...join` 并发监控 AW/W/B 与 AR/R 通道，将捕捉到的物理动作组装为完整的 Transaction，推送给 Scoreboard。
-*   **`axi_refmodel`**: 理想行为模型（基于关联数组），根据写事务的 `WSTRB` 更新字节字典，在读操作时吐出整块对齐的 32-bit 期望数据。
-*   **`axi_scoreboard`** *(搭建中)*: 接收 Monitor 的数据，调用 Refmodel 进行 Mask 掩码比对。
+### Parameter Configuration
+The DUT is instantiated with the following key parameters:
+
+| Parameter | Value | Description |
+| :--- | :--- | :--- |
+| `DATA_WIDTH` | 32 | Data bus width (4 Bytes) |
+| `ADDR_WIDTH` | 16 | Address bus width (64 KB address space) |
+| `ID_WIDTH` | 8 | Width of the AXI ID signals |
+| `STRB_WIDTH` | 4 | Width of Write Strobe (`WSTRB`) |
+| Reset Logic | `rst` | **Active-High** (0 for normal operation, 1 for reset). Note: Internal memory is *not* cleared upon reset. |
+
+## 🔌 Interface & Channels
+
+The DUT features a full standard AXI4 Slave interface with 5 independent channels:
+
+- **AW (Write Address)**: Master provides the starting address, burst length (`AWLEN`), and burst size (`AWSIZE`).
+- **W (Write Data)**: Master drives 32-bit `WDATA` along with `WSTRB` to indicate valid byte lanes.
+- **B (Write Response)**: DUT returns `BRESP` after all write data is received.
+- **AR (Read Address)**: Master provides the read starting address and burst configurations.
+- **R (Read Data)**: DUT returns a full 32-bit data block, with `RLAST` marking the end of a burst.
+
+## ⚙️ DUT Functional Features
+
+1. **Burst Types**:
+   - **INCR (Increment, `2'b01`)**: Addresses increment by `2^AxSIZE` per beat.
+   - **FIXED (Fixed, `2'b00`)**: Address remains constant, overwriting the same memory location.
+   - *(Note: The RTL does not support WRAP burst mode).*
+2. **Byte Masking (`WSTRB`)**: The DUT strictly relies on the `WSTRB` signal to determine which byte lanes are written. Bytes with `WSTRB[n] == 0` remain unchanged.
+3. **Internal Addressing**: The internal RAM array is 32-bit wide. The DUT truncates the lower 2 bits of the 16-bit byte address (`addr >> 2`) to locate the internal word, and uses `WSTRB` to resolve the exact byte.
+4. **Read Data Output**: Regardless of the requested `ARSIZE`, the DUT always outputs the entire 32-bit data block from the targeted internal word. The master is responsible for filtering the valid bytes based on address alignment.
+5. **No Outstanding Support**: As a simplified design, the DUT processes transactions serially. It does not support multiple outstanding transactions or out-of-order execution.
+
+## 🏗️ UVM Environment Architecture (Current Progress)
+
+The verification environment is built using SystemVerilog and UVM. The current structure includes:
+
+- **`axi_transaction`**: Defines the transaction fields, using `op` and `is_write` to distinguish between write and read operations.
+- **`axi_driver`**: Drives the AXI signals according to the protocol. Supports `reset`, `fixed_wr/rd`, and `incr_wr/rd` sequences.
+- **`axi_monitor`**: Utilizes `fork...join` to concurrently monitor AW/W/B and AR/R channels, assembling physical bus activities into complete transactions.
+- **`axi_refmodel`**: An ideal behavior model based on an associative array. Updates memory bytes based on `WSTRB` during writes and outputs the fully assembled 32-bit block during reads.
+- **`axi_scoreboard`** *(In Progress)*: Receives transactions from the Monitor, fetches expected data from the Refmodel, and performs byte-level mask comparisons for reads.
+
+</details>
+
+---
+
+<details open>
+<summary><b>🇨🇳 中文版 (Chinese Version)</b></summary>
+
+## 📌 DUT (待测设计) 概述
+
+待测设计（DUT）是一个符合 AXI4 协议的片内 RAM（`axi_ram`）。它作为一个标准的 AXI4 从设备（Slave），接收来自主机的读写请求，并将其转换为内部 32-bit 宽度的存储阵列访问。
+
+### 参数配置
+DUT 例化时使用的主要参数如下：
+
+| 参数名 | 值 | 说明 |
+| :--- | :--- | :--- |
+| `DATA_WIDTH` | 32 | 数据总线宽度 (4 Bytes) |
+| `ADDR_WIDTH` | 16 | 地址总线宽度 (64 KB 寻址空间) |
+| `ID_WIDTH` | 8 | AXI ID 信号宽度 |
+| `STRB_WIDTH` | 4 | 写掩码 (`WSTRB`) 宽度 |
+| 复位逻辑 | `rst` | **高电平有效**（0为正常工作，1为复位）。注意：复位不清空内部 RAM 数据。 |
+
+## 🔌 接口与通道
+
+DUT 拥有完整的标准 AXI4 从机接口，包含 5 个独立通道：
+
+- **AW (写地址)**：主机提供写起始地址、突发长度（`AWLEN`）和突发大小（`AWSIZE`）。
+- **W (写数据)**：主机发送 32-bit 数据（`WDATA`），并通过 `WSTRB` 指示哪些字节车道有效。
+- **B (写响应)**：DUT 接收完所有写数据后，返回响应（`BRESP`）。
+- **AR (读地址)**：主机提供读起始地址及突发配置。
+- **R (读数据)**：DUT 吐出完整的 32-bit 数据块，通过 `RLAST` 标记突发结束。
+
+## ⚙️ DUT 功能特性
+
+1. **突发类型 (Burst Types)**：
+   - **INCR (递增模式, `2'b01`)**：地址按 `2^AxSIZE` 递增。
+   - **FIXED (固定模式, `2'b00`)**：地址保持不变，持续覆盖同一内存位置。
+   - *（注：该 RTL 不支持 WRAP 回绕模式）*
+2. **字节掩码 (`WSTRB`)**：DUT 严格依赖 `WSTRB` 信号决定实际写入的字节车道。`WSTRB[n] == 0` 的字节将保持不变。
+3. **内部寻址机制**：内部 RAM 阵列为 32-bit 宽。DUT 会截断外部 16 位字节地址的低 2 位（`addr >> 2`）以定位内部字（Word），并通过 `WSTRB` 解析具体字节。
+4. **读数据输出**：无论请求的 `ARSIZE` 是多少，DUT 总是输出目标内部字的完整 32-bit 数据块，由主机自行根据地址对齐情况过滤有效字节。
+5. **无 Outstanding (未完成事务) 能力**：作为简化设计，DUT 串行处理事务，不支持多笔并发或乱序返回。
+
+## 🏗️ UVM 验证环境架构 (当前进度)
+
+验证环境基于 SystemVerilog 和 UVM 搭建，当前结构包含：
+
+- **`axi_transaction`**：定义事务字段，通过 `op` 和 `is_write` 区分读写操作。
+- **`axi_driver`**：按协议驱动 AXI 信号。支持 `reset`、`fixed_wr/rd`、`incr_wr/rd` 激励。
+- **`axi_monitor`**：利用 `fork...join` 并发监控 AW/W/B 与 AR/R 通道，将物理总线活动组装成完整的事务。
+- **`axi_refmodel`**：基于关联数组的理想行为模型。写操作时根据 `WSTRB` 更新内存字节；读操作时输出拼装好的完整 32-bit 数据块。
+- **`axi_scoreboard`** *(开发中)*：接收 Monitor 的事务，从 Refmodel 获取期望数据，并对读操作进行字节级掩码比对。
+
+</details>
 
 ---
 *Created for AXI4 RAM UVM Verification.*
-- `cp_backpressure`：bready/rready 延迟 0 / 1 / 2-4 / 8+
-- `cp_parallel`：读写并行 / 串行
-
----
-
-## 10. 使用建议
-
-- 参数建议：`DATA_WIDTH=32, ADDR_WIDTH=16, ID_WIDTH=4, PIPELINE_OUTPUT=0`
-- `rst` 是高有效，别按低有效接，接反了仿真前几十拍全是 X
-- `mem` 有 `initial` 清零，仿真可重复；但上板不保证，测试向量不要依赖初值
