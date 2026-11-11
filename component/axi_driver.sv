@@ -14,11 +14,12 @@ class axi_driver extends uvm_driver #(axi_transaction);
 	endfunction
 
 	virtual task run_phase(uvm_phase phase);
+		init_bus();
 		forever begin
 			seq_item_port.get_next_item(tr);
 			`uvm_info("DRV",$sformatf("awaddr=%0h",tr.awaddr),UVM_MEDIUM)
 			run();
-			seq_item_port.item_done();
+			seq_item_port.item_done(tr);
 		end
 	endtask
 
@@ -35,116 +36,88 @@ class axi_driver extends uvm_driver #(axi_transaction);
 			incr_wr();
 			incr_rd();
 		end
-		else if(tr.op == wrrdwrap)begin
-  		`uvm_info("DRV",$sformatf("Wrap Mode Write -> read wlen=%0d wsize=%0d",tr.awlen+1,tr.awsize),UVM_MEDIUM)
-      		wrap_wr();
-      		wrap_rd();
-      		end
-   		else if(tr.op == wrrderror)begin
-   		`uvm_info("DRV",$sformatf("Error Mode Write -> read wlen=%0d wsize=%0d",tr.awlen+1,tr.awsize),UVM_MEDIUM)
-      		error_wr();
-      		error_rd();
-      		end
-   	endtask
+	  endtask
 
-	task reset_dut();
-    	vif.resetn <= 1'b0;
-   	vif.awid    <= 1'b0;
-   	vif.awlen   <= 1'b0;
-   	vif.awsize  <= 1'b0;
-   	vif.awaddr  <= 1'b0;
-   	vif.awburst <= 1'b0;
-    
-  	vif.wid    <= 1'b0;
-   	vif.wdata  <= 1'b0;
-   	vif.wstrb  <= 1'b0;
-   	vif.wlast  <= 1'b0;
+	virtual task init_bus();
+        	vif.awvalid <= 1'b0;
+        	vif.wvalid  <= 1'b0;
+       	 	vif.bready  <= 1'b0;
+        	vif.arvalid <= 1'b0;
+        	vif.rready  <= 1'b0;
+        endtask
 
-   	vif.bid    <= 1'b0;
-   	vif.bresp  <= 1'b0;
-   
-   	vif.arid    <= 1'b0;
-   	vif.araddr  <= 1'b0;
-   	vif.arlen   <= 1'b0;
-   	vif.arsize  <= 1'b0;
-   	vif.arburst <= 1'b0;
-             
-   	vif.rid	  <= 1'b0;  
-   	vif.rdata  <= 1'b0;
-   	vif.rresp  <= 1'b0;
-   	vif.rstrb  <= 1'b0;
-   	vif.rlast  <= 1'b0;
-   
-   	@(posedge vif.clk);
-    	vif.resetn <= 1'b1;
+	virtual task reset_dut();
+		`uvm_info("DRV", "Resetting DUT...", UVM_LOW)
+		init_bus();
+    		vif.resetn <= 1'b1;
+      		repeat(5) @(posedge vif.clk);
+   		vif.resetn <= 1'b0;
+		@(posedge vif.clk);
+		endtask
 
-	endtask
-
-	task fixed_wr();
+	virtual task fixed_wr();
 		`uvm_info("DRV","fixed_mode write transaction is started",UVM_LOW)
 
 		@(posedge vif.clk);
-		vif.resetn <= 1'b1;
 		vif.awid   <= tr.id;
-		vif.awlen  <= 7;
-		vif.awsize <= 3'b010;
+		vif.awlen  <= tr.awlen;
+		vif.awsize <= tr.awsize;
 		vif.awaddr <= tr.awaddr;
-		vif.awburst <= 0;
-		`uvm_info("DRV",$sformatf("awaddr = %0d wdata = %0d",tr.awaddr,tr.wdata),UVM_LOW)
-
+		vif.awburst <= 2'b00;
 		vif.wvalid <= 1'b0;
 		vif.bready <= 1'b0;
-		vif.arvalid <= 1'b0; 
-
 		vif.awvalid <= 1'b1;
-		wait(vif.awready == 1'b1);
-		@(posedge vif.clk);
-
-		vif.awvalid <= 1'b0;
-		vif.wvalid <= 1'b1;
-		vif.wid	    <= tr.id;
 		vif.wlast   <= 1'b0;
+		//写地址通道握手
+		do @(posedge vif.clk); while(!(vif.awvalid && vif.awready));
+		vif.awvalid <= 1'b0;
 
-		wait(vif.wready == 1'b1);
-		@(posedge vif.clk);
 		for(int i=0;i<(vif.awlen+1);i++) begin
-			vif.wdata <= $urandom_range(0,100);
-			vif.wstrb <= 4'b1111;
-			wait(vif.wready == 1'b1);
-			@(posedge vif.clk);
-		end
-
-		vif.wlast <= 1'b1;
+			vif.wdata <= tr.wdata[i];
+			vif.wstrb <= tr.wstrb[i];
+			vif.wlast <= (i == tr.awlen);
+			vif.wvalid <= 1'b1;
+		//写通道握手
+		do @(posedge vif.clk); while(!(vif.wvalid && vif.wready));
+	end
 		vif.wvalid <= 1'b0;
+		vif.wlast <= 1'b0;
 		vif.bready <= 1'b1;
-		vif.bid <= tr.id;
-		wait(vif.bvalid == 1'b1);
-		@(posedge vif.clk);
+		//写响应通道握手
+		do @(posedge vif.clk); while(!(vif.bvalid && vif.bready));
 		vif.bready <= 0;
+		if(vif.bid != tr.id) begin
+		`uvm_error("[DRV]",$sformatf("bid =%0d,id=%0d",vif.bid,tr.id))
+	end
+		`uvm_info("[DRV]",$sformatf("bresp = %0d",vif.bresp),UVM_MEDIUM)
+		
 		`uvm_info("[DRV]","Fixed_mode write transaction is completed",UVM_LOW)
-     	 	`uvm_info("[DRV]",$sformatf("awaddr=%0d wdata=%0d",vif.awaddr,vif.wdata),UVM_LOW)
-	endtask
+ 	endtask
 	
 	virtual task fixed_rd();
 		`uvm_info("DRV","fixed_mode read transaction is started",UVM_LOW)
 
 		@(posedge vif.clk);
-		vif.resetn <= 1'b1;
 		vif.arvalid <= 1'b1;
 		vif.arid <= tr.id;
-		vif.arlen <= 7;
-		vif.arsize <= 3'b010;
-		vif.araddr <= tr.awaddr;
-		vif.arburst <= 0;
-
-		wait(vif.arready == 1);
-		@(posedge vif.clk);
-		vif.rready <= 1'b1;
-
-		wait(vif.rlast == 1'b1);
-		@(posedge vif.clk);
-		vif.rready <= 1'b0;
+		vif.arlen <= tr.arlen;
+		vif.arsize <=tr.arsize;
+		vif.araddr <= tr.araddr;
+		vif.arburst <= 2'b00;
+		//读地址通道握手
+		do @(posedge vif.clk); while (!(vif.arvalid && vif.arready));
 		vif.arvalid <= 1'b0;
+		vif.rready <= 1'b1;
+		for(int i=0;i<(vif.arlen+1);i++) begin
+			//读通道握手
+			do @(posedge vif.clk) ; while (!(vif.rvalid && vif.rready));			
+			if (i == tr.arlen && vif.rlast !== 1'b1) 
+			`uvm_error("DRV", "Missing RLAST!")
+			if (i < tr.arlen && vif.rlast === 1'b1)  
+			`uvm_error("DRV", "Unexpected RLAST!")
+		end
+		
+		vif.rready <= 1'b0;
 		`uvm_info("DRV","FIXED_MODE read complete",UVM_LOW)
 	endtask
 
@@ -152,207 +125,60 @@ class axi_driver extends uvm_driver #(axi_transaction);
 		`uvm_info("DRV","INCR_mode write transaction is started",UVM_MEDIUM)
 		
 		@(posedge vif.clk);
-		vif.resetn <= 1'b1;
 		vif.awid <= tr.id;
-		vif.awlen <= 7;
-		vif.awsize <= 3'b010;
-		vif.awaddr <= 5;
-		vif.awburst <= 1;
+		vif.awlen <= tr.awlen;
+		vif.awsize <= tr.awsize;
+		vif.awaddr <= tr.awaddr;
+		vif.awburst <= 2'b01;
 
 		vif.wvalid <= 1'b0;
 		vif.bready <= 1'b0;
-		vif.arvalid <= 1'b0;
-
 		vif.awvalid <= 1'b1;
-		wait(vif.awready == 1'b1);
-		@(posedge vif.clk);
-
+		//写地址握手
+		do @(posedge vif.clk); while (!(vif.awvalid == 1'b1 && vif.awready == 1'b1));
 		vif.awvalid <= 1'b0;
-		vif.wvalid <= 1'b1;
-		vif.wid <= tr.id;
 		vif.wlast <= 1'b0;
 
-		wait(vif.wready == 1'b1);
-		@(posedge vif.clk);
 		for(int i=0;i<(vif.awlen+1);i++) begin
-			vif.wdata <= $urandom_range(0,100) ;
-			vif.wstrb <= 4'b1111;
-		wait(vif.wready == 1'b1);
-		@(posedge vif.clk);
+			vif.wvalid <= 1'b1;
+			vif.wstrb <= tr.wstrb[i];
+			vif.wdata <= tr.wdata[i];
+			vif.wlast <= (i == tr.awlen);
+			do @(posedge vif.clk); while(!(vif.wvalid == 1'b1 && vif.wready == 1'b1));
 		end
 
-		vif.wlast <= 1'b1;
 		vif.wvalid <= 1'b0;
-		vif.bready <= 1'b1;
-		vif.bid <= tr.id;
-		wait(vif.bvalid == 1'b1);
-		@(posedge vif.clk);
-		vif.bready <= 0;
+		vif.bready <=1'b1;
+		do @(posedge vif.clk); while(!(vif.bready == 1'b1 && vif.bvalid == 1'b1));
+		if(vif.bid != tr.id)
+			`uvm_error("[DRV]",$sformatf("bid =%0d,id=%0d",vif.bid,tr.id))
 		`uvm_info("[DRV]","INCR_mode write transaction is completed",UVM_LOW)
-      		`uvm_info("[DRV]",$sformatf("awaddr=%0d wdata=%0d",vif.awaddr,vif.wdata),UVM_LOW)
-
+ 
    endtask
 	
 	  virtual task incr_rd();
-		 tr = axi_transaction::type_id::create("tr");
 		`uvm_info("[DRV]","INCR_mode read transaction is started",UVM_MEDIUM)
-
-		@(posedge vif.clk);
-		vif.resetb <= 1'b1;
+		vif.arid <= tr.id;
+		vif.araddr <= tr.araddr;
+		vif.arlen <= tr.arlen;
+		vif.arsize <= tr.arsize;
+		vif.arburst <= 2'b01;
 		vif.arvalid <= 1'b1;
-		vif.arid    <= tr.id;
-		vif.arlen   <= 7;
-		vif.arsize  <= 3'b10;
-		vif.araddr  <= 5;
-		vif.arburst <= 1;
-		
-		wait(vif.arready == 1);
-		@(posedge vif.clk);
-		vif.rready <= 1'b0;
+		do @(posedge vif.clk); while(!(vif.arvalid == 1'b1 && vif.arready == 1'b1));
 		vif.arvalid <= 1'b0;
-		
+		vif.rready <= 1'b1;
+
+		for(int i=0;i<vif.arlen+1;i++) begin
+			do @(posedge vif.clk); while(!(vif.rvalid == 1'b1 && vif.rready == 1'b1));
+			if (i == tr.arlen && vif.rlast !== 1'b1) 
+			`uvm_error("DRV", "Missing RLAST!")
+			if (i < tr.arlen && vif.rlast === 1'b1)  
+			`uvm_error("DRV", "Unexpected RLAST!")
+		end
+		vif.rready <= 1'b0;
 		`uvm_info("[DRV]","INCR_MODE read complete",UVM_MEDIUM)
 	endtask
 
-	virtual task wrap_wr();
-		`uvm_info("[DRV]","WRAP_MODE write transaction is started",UVM_MEDIUM)
-
-		@(posedge vif.clk);
-		vif.resetn <= 1'b1;
-		vif.awid   <= tr.id;
-		vif.awid   <= 7;
-		vif.awsize <= 3'b010;
-		vif.awaddr <= 5;
-		vif.awburst <= 2;
-		`uvm_info("[DRV]",$sformatf("awaddr=%0d wdata=%0d",tr.awaddr,tr.wdata),UVM_LOW)
-
-		vif.wvalid <= 1'b0;
-		vif.bready <= 1'b0;
-		vif.arvalid <= 1'b0;
-
-		vif.arvalid <= 1'b1;
-		wait(vif.awready == 1'b1);
-		@(posedge vif.clk);
-
-		vif.awvalid <= 1'b0;
-		vif.wvalid <= 1'b1;
-		vif.wid <= tr.id;
-		vif.wlast <= 1'b0;
-
-		wait(vif.wreadty == 1'b1);
-		@(posedge vif.clk);
-		for(int i=0; i<(vif.awlen+1);i++) begin
-			vif.wdata <= $urandom_range(0,100);
-			vif.wstrb <= 4'b1111;
-			wait(vif.wready == 1'b1);
-			@(posedge vif.clk);
-		end
-
-		vif.wlast <= 1'b1;
-		vif.wvalid <= 1'b0;
-		vif.bready <= 1'b1;
-		vif.bid <= tr.id;
-		wait(vif.bvalid == 1'b1);
-		@(posedge vif.clk);
-		vif,bready <= 0;
-		`uvm_info("[DRV]","WRAP_mode write transaction is completed",UVM_LOW)
-      		`uvm_info("[DRV]",$sformatf("awaddr=%0d wdata=%0d",vif.awaddr,vif.wdata),UVM_LOW)
-
-   endtask	
-   		virtual task wrap_rd();
-			`uvm_info("[DRV]","WRAP_mode read transaction is started",UVN_MEDIUM)
-
-			@(posedge vif.clk);
-			vif.resetn <= 1'b1;
-			vif.arvalid <= 1'b1;
-			vif.arid <= tr.id;
-			vif.arlen <= 7;
-			vif.arsize <= 3'b010;
-			vif.araddr <= 32'h0005;
-			vif.arburst <= 2;
-
-			wait(vif.aready == 1);
-			@(posedge vif.clk);
-			vif.rready <= 1'b1;
-
-			wait(vif.rlast == 1'b1);
-			@(posedge vif.clk);
-			vif.rready <= 1'b0;
-			vif.arvalid <= 1'b0;
-			`uvm_info("[DRV]", "WRAP_MODE read complete",UVM_LOW)
-   endtask
-   		
-   		virtual task error_wr();
-			`uvm_info("[DRV]","ERROR_mode write transaction is started",UVM_MEDIUM)
-
-			@(posedge vif.clk);
-			vif.resetn <= 1'b1;
-			vif.awid   <= tr.id;
-			vif.awlen  <= 7;
-			vif.awsize <= 3'b010;
-			vif.awaddr <= 129;
-			vif.awburst <= 2;
-			`uvm_info("[DRV]",$sformatf("awaddr=%0d wdata=%0d",tr.awaddr,tr.wdata),UVM_LOW);
-
-			vif.wvalid <= 1'b0;
-			if.wvalid  <= 1'b0;
-      		vif.bready  <= 1'b0;
-      		vif.arvalid <= 1'b0;
-      		//vif.rready<= 1'b0;
-         
-      		vif.awvalid <= 1'b1;
-      		wait(vif.awready == 1'b1);
-      		@(posedge vif.clk);
-
-      		vif.awvalid <= 1'b0;
-      		vif.wvalid  <= 1'b1;
-      		vif.wid     <= tr.id;
-      		vif.wlast   <= 1'b0;
-
-      		wait(vif.wready == 1'b1);
-      		@(posedge vif.clk);
-      		for(int i=0; i<(vif.awlen+1); i++) begin
-      		vif.wdata <= $urandom_range(0,100);
-      		vif.wstrb <= 4'b1111;
-      		wait(vif.wready == 1'b1);
-      		@(posedge vif.clk);
-      		end
-
-      		vif.wlast   <= 1'b1; 
-      		vif.wvalid  <= 1'b0;
-      		vif.bready  <= 1'b1;
-      		vif.bid     <= tr.id;
-      		wait(vif.bvalid == 1'b1);
-      		@(posedge vif.clk);
-      		 vif.bready <= 0;
-      		`uvm_info("[DRV]","ERROR_mode write transaction is completed",UVM_LOW)
-      		`uvm_info("[DRV]",$sformatf("awaddr=%0d wdata=%0d",vif.awaddr,vif.wdata),UVM_LOW)
-
-   		endtask
-
-   		virtual task error_rd();
-         		`uvm_info("[DRV]", "ERROR_mode read transaction is started",UVM_LOW)
-
-         		@(posedge vif.clk);
-         		vif.resetn  <= 1'b1;
-         		vif.arvalid <= 1'b1;
-         		vif.arid    <= tr.id;
-        		vif.arlen   <= 7;
-         		vif.arsize  <= 3'b010;
-         		vif.araddr  <= 129;
-         		vif.arburst <= 2;
-
-         		wait(vif.arready == 1);
-         		@(posedge vif.clk);
-         		vif.rready <= 1'b1;
-            
-         		wait(vif.rlast == 1'b1);
-         		@(posedge vif.clk);
-         		vif.rready <= 1'b0;
-         		vif.arvalid<= 1'b0;
-
-         		`uvm_info("[DRV]", "ERROR_MODE read complete",UVM_LOW)
-   		endtask
 endclass
    		
 	
