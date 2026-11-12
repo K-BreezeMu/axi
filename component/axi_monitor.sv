@@ -28,9 +28,9 @@ class axi_monitor extends uvm_monitor;
 	endtask
 		
 	virtual task monitor_read();
-		tr = axi_transaction::type_id::create("tr");
-		tr.is_write = 0;
 		forever begin
+			tr = axi_transaction::type_id::create("tr");
+			tr.is_write = 0;
 			do @(posedge vif.clk); while(!(vif.arvalid && vif.arready));
 			tr.araddr = vif.araddr;
 			tr.arlen = vif.arlen;
@@ -48,7 +48,6 @@ class axi_monitor extends uvm_monitor;
 		endtask
 
 	virtual task monitor_write();
-		axi_transaction tr;
 		forever begin
 			tr = axi_transaction::type_id::create("tr");
 			tr.is_write = 1;

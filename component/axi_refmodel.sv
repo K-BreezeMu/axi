@@ -1,4 +1,4 @@
-module axi_refmodel;
+class axi_refmodel;
 	bit [7:0] ref_mem [bit [15:0]];
 	function void write (bit [15:0] awaddr,bit [7:0] awlen,bit [2:0] awsize,bit [1:0] awburst,bit [3:0] wstrb[$],bit [31:0] wdata[$]);
 		bit [15:0] addr;
@@ -56,7 +56,7 @@ module axi_refmodel;
 		return rdata;
 	endfunction
 
-endmodule
+endclass
 							
 
 				

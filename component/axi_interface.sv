@@ -33,8 +33,8 @@ interface axi_interface;
 	logic [1:0] arburst;
 	logic arvalid;
 	logic arlock;
-	logic arcache;
-	logic arprot;
+	logic [3:0] arcache;
+	logic [2:0] arprot;
 
 	logic [7:0] rid;
 	logic [31:0] rdata;
