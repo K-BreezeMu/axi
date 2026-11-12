@@ -111,4 +111,42 @@ DUT 拥有完整的标准 AXI4 从机接口，包含 5 个独立通道：
 </details>
 
 ---
+#11.12日
+# AXI4 RAM UVM Verification Project - Daily Progress
+
+## 📅 今日战果：核心组件搭建完毕
+
+成功搭建了完整的 AXI4 RAM UVM 验证环境骨架，包含以下核心文件：
+
+- [x] **`axi_transaction`**：统一定义读写事务，新增 `is_write` 标志位。
+- [x] **`axi_driver`**：严格按 AXI 时序驱动，支持 `reset`、`FIXED`、`INCR` 模式。
+- [x] **`axi_monitor`**：使用 `fork...join` 并发监控读写通道，完整拼装总线事务。
+- [x] **`axi_refmodel`**：基于关联数组的字节级理想模型，按 `WSTRB` 掩码精准更新。
+- [x] **`axi_scoreboard`**：实现 **Mask 掩码比对** 逻辑，支持统计 `pass/fail`。
+- [x] **`axi_agent` & `axi_env`**：完成标准 UVM 树形分层与 TLM 端口连接。
+
+---
+
+## 🔧 关键 Bug 修复记录
+
+在编码过程中排查并解决了以下致命问题：
+
+1. **时序竞争与死锁**：废弃 `wait()` 电平敏感等待，全面替换为严谨的 `do @(posedge clk); while(!(valid && ready))` 握手判断。
+2. **地址截断灾难**：明确 Refmodel 中**先计算完整地址（`addr + i*size`），再进行 4 字节对齐（`& ~3`）**的规则，防止 INCR 模式下数据错位。
+3. **句柄覆盖冲突**：将 Monitor 中的 `create("tr")` 移入 `forever` 循环内，确保每次 TLM 写入的数据安全独立。
+
+---
+
+## ✨ 核心亮点
+
+- **深度理解 AXI 非对称性**：由于读通道无 `RSTRB`，Refmodel 吐出完整的 32-bit 块，Scoreboard 利用 `start_lane = addr % 4` 和字节切片 `[lane*8 +: 8]` 实现了**精准的窄传输比对**，完美过滤无效车道数据。
+- **完备的双模式支持**：Refmodel 与 Scoreboard 均完美兼容 `FIXED`（地址不变，重复覆盖）与 `INCR`（地址按 `2^AxSIZE` 递增）模式。
+- **工业级监控架构**：读写通道独立并行监控，互不阻塞，保障采集完整性。
+
+---
+
+## 🚀 Next Steps (下一步计划)
+
+- [ ] **完善 `axi_transaction`**：补齐随机化约束，确保 `wdata.size()` 和 `wstrb.size()` 与 `awlen` 匹配，并加入合理的地址对齐约束。
+- [ ] **搭建 `axi_subscriber`**：完成覆盖率收集器开发，对 `awsize`、`arsize`、`axburst` 以及 `wstrb` 的取值分布与交叉组合进行采样。
 *Created for AXI4 RAM UVM Verification.*
